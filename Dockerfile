@@ -1,25 +1,23 @@
-#Grab the latest alpine image
-FROM alpine:latest
+FROM node:16-bullseye-slim
 
-# Install python and pip
-RUN apk add --no-cache --update python3 py3-pip bash
-ADD ./webapp/requirements.txt /tmp/requirements.txt
+WORKDIR /app
 
-# Install dependencies
-RUN pip3 install --no-cache-dir -q -r /tmp/requirements.txt
+# install sqlite3 dependencies, you can skip this if you don't use sqlite3 in the image
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libsqlite3-dev python3 build-essential && \
+    rm -rf /var/lib/apt/lists/* && \
+    yarn config set python /usr/bin/python3
 
-# Add our code
-ADD ./webapp /opt/webapp/
-WORKDIR /opt/webapp
+# Copy repo skeleton first, to avoid unnecessary docker cache invalidation.
+# The skeleton contains the package.json of each package in the monorepo,
+# and along with yarn.lock and the root package.json, that's enough to run yarn install.
+COPY yarn.lock package.json packages/backend/dist/skeleton.tar.gz ./
+RUN tar xzf skeleton.tar.gz && rm skeleton.tar.gz
 
-# Expose is NOT supported by Heroku
-# EXPOSE 5000 		
+RUN yarn install --frozen-lockfile --production --network-timeout 300000 && rm -rf "$(yarn cache dir)"
 
-# Run the image as a non-root user
-RUN adduser -D myuser
-USER myuser
+# Then copy the rest of the backend bundle, along with any other files we might want.
+COPY packages/backend/dist/bundle.tar.gz app-config.yaml ./
+RUN tar xzf bundle.tar.gz && rm bundle.tar.gz
 
-# Run the app.  CMD is required to run on Heroku
-# $PORT is set by Heroku			
-CMD gunicorn --bind 0.0.0.0:$PORT wsgi 
-
+CMD ["node", "packages/backend", "--config", "app-config.yaml"]
